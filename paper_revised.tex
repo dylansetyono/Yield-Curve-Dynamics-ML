@@ -1,0 +1,866 @@
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2022_conference,times}
+% Optional math commands from https://github.com/goodfeli/dlbook_notation.
+\input{math_commands.tex}
+% Submission type
+\newcommand{\apsname}{Yield Curve Jacobian}
+% Group number
+\newcommand{\gpnumber}{7}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xcolor}
+% Project title
+\title{Leading-Order Degeneracy of a Decoder-Tangent Penalty:\\
+A Constraint Ablation for Latent Yield-Curve Dynamics}
+\author{Daniel Deng \\
+Student\# 1011132141 \\
+\texttt{ddaniel.deng@mail.utoronto.ca} \\
+\And
+Dylan Setyono \\
+Student\# 1011116668 \\
+\texttt{dylan.setyono@mail.utoronto.ca} \\
+}
+\newcommand{\fix}{\marginpar{FIX}}
+\newcommand{\new}{\marginpar{NEW}}
+\iclrfinalcopy
+\begin{document}
+\maketitle
+\begin{abstract}
+We study multi-horizon forecasting of the U.S.\ Treasury yield curve with a
+two-stage geometric pipeline: a Student-$t$ conditional VAE learns a
+low-dimensional curve representation, and a latent drift model evolves that state
+under a persistence-residual decode, so that zero drift recovers a random walk.
+On a shared frozen Stage~A model we compare three soft-training configurations---%
+unconstrained, a decoder-Jacobian tangent penalty, and a bundle of curve-shape
+regularizers---against persistence.
+Our main contribution is analytic. We show that an exact tangent projector
+annihilates the leading-order decoded latent move. In the joint limit of an exact
+projector and a first-order decoder linearization, the penalty is constant in the
+dynamics parameters. The implemented penalty is not in that limit: ridge
+regularization creates both a reconstruction-residual cross-term and an anisotropic
+shrinkage term, while decoder curvature supplies an additional training signal. We
+derive these surviving terms and show that the familiar $\varepsilon/4$ spectral
+bound applies only to the quadratic shrinkage component, not to the complete
+penalty. Thus the construction loses its direct first-order tangent signal but is
+not generally inert.
+The empirical results are reported as point
+estimates from a single training run. Adding the tangent penalty changes test RMSE
+by at most $7\times10^{-5}$ at the trained horizons and reverses direction at the
+extrapolated horizon. Both drift variants have errors close to persistence at
+$h{=}1,5$ and improve on it at $h{=}21$ by roughly $1.3\%$ in point estimate;
+persistence is better at
+$h{=}63$. The configuration carrying the regularizer bundle diverges under
+multi-step rollout. We perform no paired significance testing and vary no seeds, so
+we make no claim that any of these differences is reproducible. These figures are
+also conditional on a training panel containing the disclosed 2002--2006
+interpolation defect. The contribution is a
+characterization of the leading-order degeneracy and surviving signals of a
+decoder-Jacobian tangent penalty, together with a constraint ablation on a shared
+representation with a random walk as the null.
+% Main body page count
+----Total Pages: \pageref{last_page}
+\end{abstract}
+\section{Introduction}
+The yield curve sits at the center of fixed-income finance: it prices bonds,
+discounts future cash flows, and encodes the market's view of growth and monetary
+policy. Modeling how the whole curve moves over time is what lets us forecast,
+hedge, and stress-test rate portfolios. The task is more tractable than it looks,
+because the curve is highly redundant. Since \citet{LittermanScheinkman1991},
+three factors (level, slope, and curvature) have been known to explain almost all
+of its variation. Classical models build on this in different ways:
+Nelson--Siegel \citep{NelsonSiegel1987} and its dynamic Diebold--Li form
+\citep{DieboldLi2006} impose fixed factor shapes, affine and HJM models
+\citep{DuffieKan1996, HeathJarrowMorton1992} add explicit no-arbitrage structure,
+and PCA captures the leading linear factors. These models are robust and
+interpretable, but their linear, parametric form limits how well they track the
+nonlinear way real curves deform across regimes.
+Deep generative models offer more flexibility, but risk producing curves that
+collapse to a few modes or violate no-arbitrage out of sample.
+\citet{NoArbVAEYieldCurves} address this with a two-stage, physics-informed design:
+a Student-$t$ conditional VAE with dynamic level injection learns a heavy-tailed
+curve representation that separates macroeconomic shape from the absolute rate
+level, and the latent state is then evolved by a continuous-time neural SDE
+penalized by a no-arbitrage PDE. We take this pipeline as our starting point and
+reproduce a deliberately simplified version of it: a single currency (USD), a
+discrete tenor grid, and a first-order residual from which the Hessian convexity
+term is omitted.
+Alongside their main model, \citet{NoArbVAEYieldCurves} discuss a decoder-Jacobian
+construction that ties the curve's admissible moves to the local geometry of the
+learned representation, using the Jacobian as a volatility basis together with a
+nonlinear re-encoding $D(E(\cdot))$. We do not implement that benchmark. What we
+study instead is a construction suggested by the same geometric intuition and
+substantially cheaper: a soft penalty that measures how far a forecast lies from
+the affine tangent space at the decode of the current latent state, using a
+ridge-regularized tangent map. We call it a linearized tangent-penalty surrogate to
+keep the distinction from their proposal explicit, and our findings are about our
+construction only.
+Our main experiment is an ablation on a frozen Stage~A model. We train the latent
+dynamics three ways---unconstrained, with the tangent penalty, and with a bundle of
+curve-shape regularizers---so that comparisons are made on the same representation.
+We evaluate on U.S.\ Treasury constant-maturity yields from FRED at horizons of one
+day to one quarter, scoring point-forecast accuracy alongside re-encoding distance,
+the off-tangent component of each forecast move, and forward-curve smoothness.
+Critically, we benchmark against a random-walk (persistence) forecast. Persistence
+is the appropriate null for daily yields and is not reported by
+\citet{NoArbVAEYieldCurves}, whose headline figures concern reconstruction rather
+than multi-step forecasting; including it changes which claims the evidence can
+support.
+Our central result is analytic and does not depend on any run. The decoded latent
+move lies in $\operatorname{span}(J)$ to first order, so an exact tangent projector
+annihilates its leading-order contribution. For the implemented ridge map, however,
+the loss also contains a term coupling the latent move to the fixed Stage~A
+reconstruction residual, as well as a quadratic shrinkage term; for the nonlinear
+decoder, curvature creates a further signal. The $\varepsilon/4$ spectral bound
+controls only the quadratic shrinkage term. Consequently, the construction has a
+leading-order degeneracy, but the implemented penalty is not identically constant
+and can still shape the dynamics through ridge leakage and decoder curvature.
+The empirical findings are consistent with that analysis and are reported as point
+estimates from a single training run per configuration. The persistence-residual
+drift model is within $5\times10^{-5}$--$7\times10^{-4}$ of a random walk at daily
+and weekly horizons, improves on it at $h{=}21$ by roughly $1.3\%$, and loses at the
+extrapolated $h{=}63$. Adding the tangent penalty changes test RMSE by at most
+$7\times10^{-5}$ at the trained horizons and reverses direction at $h{=}63$; the
+geometry diagnostics likewise do not separate the two configurations in a consistent
+direction. The regularizer bundle is the unstable configuration: worse than the
+unconstrained model at every horizon, diverging from $0.041$ at $h{=}1$ to $7.68$ at
+$h{=}63$.
+Three limitations bound all of this and we state them at the outset. First, we varied
+no seeds and ran no paired significance tests, so we make no claim that
+sub-$10^{-4}$ differences are reproducible; observing a small difference is
+consistent with weak surviving signals but does not establish their cause. Second,
+Stage~A test reconstruction RMSE is $0.659$, so real curves sit far from
+$D(E(y))$ and absolute re-encoding distance closely tracks the Stage~A error at the
+persistence anchor. This makes projection-based accuracy gains uncertain, but it
+does not constitute a mathematical bound on what a projection method could achieve.
+Third, the training panel contains a four-year interpolated block caused by the
+30-year-series discontinuation; all empirical findings are conditional on the
+resulting Stage~A representation.
+\section{Method}
+\label{sec:method}
+\subsection{Problem setup and notation}
+Let $x_t \in \mathbb{R}^{N}$ denote the vector of constant-maturity Treasury
+yields observed on business day $t$, where the $N=11$ maturities (tenors) are
+\begin{equation*}
+\tau \in \{1\mathrm{M}, 3\mathrm{M}, 6\mathrm{M}, 1\mathrm{Y}, 2\mathrm{Y},
+3\mathrm{Y}, 5\mathrm{Y}, 7\mathrm{Y}, 10\mathrm{Y}, 20\mathrm{Y},
+30\mathrm{Y}\},
+\end{equation*}
+with $\tau$ measured in years. We treat the observed panel
+$\{x_t\}_{t=1}^{T}$ as discrete samples of a continuously evolving curve and seek
+to model its dynamics so as to respect the well-documented low-dimensional
+structure of the yield curve and to accommodate heavy-tailed yield innovations.
+The pipeline is organized in two stages. \textbf{Stage~A} learns a low-dimensional
+latent representation $z_t \in \mathbb{R}^{d}$ of the curve. \textbf{Stage~B} learns
+the dynamics of $z_t$ and decodes forecasts back to curves, with optional soft
+training penalties. We set $d=5$: the classical finding that approximately $99\%$ of
+yield-curve variation is spanned by three factors motivates a low-dimensional
+representation, and two additional dimensions give the decoder headroom for shape
+variation the linear factors do not capture.
+\subsection{Data and preprocessing}
+\label{sec:data}
+We obtain daily constant-maturity yields for the eleven tenors above from the
+Federal Reserve Economic Data (FRED) repository. All results come from a single
+panel and a single training run. The download is configured to start 2001-07-01, but
+the binding constraint is the 1-month series (DGS1MO), whose first observation is
+2001-07-31, so after incomplete rows are dropped the panel begins there. The frozen
+scorecard does not record the day on which the panel was retrieved; the results were
+committed on 2026-07-09 and a prior retrieval ran through 2026-06-25, which brackets
+the end of the panel between those two dates and gives $T$ between $6{,}498$ and
+$6{,}508$ business days. Nothing in what follows depends on which day within that
+window the panel was pulled: two additional weeks at the end of the sample move the
+$70\%$ cut by about a week.
+The cleaning procedure has a consequence we state explicitly because it bears on how
+the results should be read. We drop any day on which any tenor is missing, then
+reindex the remaining panel to a regular business-day calendar and impute the
+resulting gaps by time interpolation followed by forward/back-filling. The 30-year
+series (DGS30) is discontinued between 2002-02-18 and 2006-02-09, so those days are
+first removed by the completeness filter and then reinstated by the business-day
+reindex and filled by interpolation: $1{,}037$ business days, roughly $16\%$ of the
+panel, are linear interpolants rather than observations. The same mechanism creates
+interpolated rows on market holidays, which the business-day calendar includes and
+FRED does not report. Because interpolation is applied before the chronological
+split and uses \texttt{limit\_direction="both"}, imputed values adjacent to a split
+boundary can draw on observations from the following split.
+The mitigating fact is that the interpolated 2002--2006 window falls entirely inside
+the training split. Under the $70/15/15$ chronological partition, training runs from
+2001-07-31 to early January 2019 (2019-01-03 or 2019-01-14, depending on the
+retrieval day), validation from there to late September or mid-October 2022, and the
+test split from autumn 2022 to the end of the panel in mid-2026. The interpolated
+block therefore contaminates the learned representation and the scaling statistics,
+but not the held-out evaluation on which every reported number is computed. We regard
+a rebuild of the panel---beginning in 2006, or dropping the 30-year tenor---as the
+correct fix and did not perform it; the results below should be read as conditional
+on a Stage~A model trained on a panel with this defect.
+
+Stage~B forecasts require a 21-business-day lookback, so evaluation begins 21
+business days after the start of the test split. The held-out evaluation sample is
+approximately $954$ forecast windows at $h{=}1$, falling to approximately $892$ at
+$h{=}63$. Every figure and table below is scored on that sample, autumn 2022 to
+mid-2026, and none of it overlaps the training period.
+The cleaned panel is partitioned \emph{chronologically} into training ($70\%$),
+validation ($15\%$), and test ($15\%$) sets; no shuffling is performed. We
+standardize each tenor using robust statistics estimated \emph{on the training split
+only},
+\begin{equation}
+  \tilde{x} = \frac{x - \operatorname{median}(x)}{\operatorname{IQR}(x)},
+\end{equation}
+and the fitted statistics are applied unchanged to the validation and test splits.
+All reported metrics are in these scaled units.
+We then apply a level/shape decomposition (``LevelScript''), \emph{after} robust
+scaling: writing $\tilde{x}_t$ for the scaled curve, we take the level to be its
+1-year component, $\ell_t = \tilde{x}_t^{(\mathrm{1Y})}$, and the shape to be
+$s_t = \tilde{x}_t - \ell_t \mathbf{1}$. Because each tenor carries its own IQR,
+subtracting the scaled 1-year component does not correspond to removing a parallel
+shift of the underlying yield curve, and this ordering differs from the procedure of
+\citet{NoArbVAEYieldCurves}, who decompose before scaling. We report the
+decomposition as implemented and make no claim that it separates level from shape in
+an economic sense; it supplies the decoder with a conditioning variable that carries
+most of the curve's persistence.
+Throughout, $D_\theta^{(s)}(z,\ell)$ denotes the decoded scaled shape and
+$D_\theta(z,\ell)=D_\theta^{(s)}(z,\ell)+\ell\mathbf{1}$ the corresponding full
+scaled curve; we write $y_t=\tilde{x}_t$ for that scaled full curve in the
+forecasting equations. When a level argument is suppressed below, it is fixed at
+the last level available at the forecast origin. Likewise, $E_\phi(x)$ is
+shorthand for applying the encoder to the level/shape pair derived from the scaled
+curve $x$.
+\subsection{Stage A: latent representation learning}
+\label{subsec:stageA}
+Stage~A is a conditional variational autoencoder over scaled shape curves,
+conditioned on the level. The approximate posterior is diagonal Gaussian,
+\begin{equation}
+  q_\phi(z \mid s, \ell) = \mathcal{N}\!\big(\mu_\phi(s,\ell),\,
+  \operatorname{diag}\sigma_\phi^2(s,\ell)\big),
+  \qquad p(z) = \mathcal{N}(0, I_d),
+\end{equation}
+and training maximizes the $\beta$-weighted evidence lower bound
+\begin{equation}
+  \mathcal{L}_{\mathrm{ELBO}}
+  = \mathbb{E}_{q_\phi(z\mid s,\ell)}\big[\log p_\theta(s \mid z, \ell)\big]
+  - \beta\, \mathrm{KL}\!\big(q_\phi(z \mid s,\ell)\,\|\,p(z)\big),
+\end{equation}
+with the expectation estimated by a single reparameterized sample
+$z = \mu_\phi + \sigma_\phi \odot \epsilon$, $\epsilon \sim \mathcal{N}(0,I_d)$,
+and $\beta = 0.03$.
+The \textbf{Student-$t$ CVAE}, our Stage~A model, augments this with a per-tenor
+Student-$t$ observation model,
+\begin{equation}
+  p_\theta(s_i \mid z, \ell) = t_{\nu}\!\left(s_i;\, \hat{s}_i,\, a_i\right),
+  \qquad \hat{s}_i = D_\theta^{(s)}(z, \ell)_i,
+\end{equation}
+with per-tenor scale $a_i$ from a dedicated head and a learned degrees-of-freedom
+parameter $\nu = \mathrm{softplus}(\nu_{\mathrm{raw}}) + 2.01$, constrained above
+$2$ to keep the variance finite. The reconstruction term is the exact closed-form
+Student-$t$ negative log-likelihood, whose polynomial tails make reconstruction
+robust to large yield moves; the Gaussian model is the $\nu\to\infty$ limit. On
+completion we export the deterministic latent means $z_t=\mu_\phi(s_t,\ell_t)$ for
+all splits as the input series for Stage~B.
+Stage~A uses latent dimension $d{=}5$, hidden width $256$, and $200$ epochs. On the
+test set, reconstruction RMSE is $0.659$ (MAE $0.523$). This does not propagate
+directly into the forecasts: the persistence-residual parameterization of
+Section~\ref{subsec:stageB} decodes a \emph{difference} of two curves, so the static
+reconstruction bias cancels to first order, which is why forecast RMSE at $h{=}1$
+($\approx 0.029$) is an order of magnitude below the reconstruction error. It does,
+however, govern the magnitude of the geometry diagnostics
+(Section~\ref{sec:analysis-reencoding}) and the size of the residual term in
+Section~\ref{sec:analysis-inert}. We do not report a rank-matched linear
+reconstruction baseline, so we cannot separate the share of this error attributable
+to the rank constraint from the share attributable to the decoder.
+\subsection{Stage B: latent dynamics}
+\label{subsec:stageB}
+Using the frozen Stage~A encoder, the curve history maps to a latent trajectory
+$\{z_t\}$. Write $\mathbf{z}_t=(z_{t-L+1},\dots,z_t)$ for the last $L=10$ latent
+states, on which both networks are conditioned. Let $\psi$ denote the trainable
+Stage~B parameters; the frozen decoder retains parameters $\theta$. The state is
+modeled as
+$dz_t=\mu_{\mathbb{P},\psi}(\mathbf{z}_t)\,dt+
+\sigma_\psi(\mathbf{z}_t)\,dW_t^{\mathbb{P}}$,
+with $\mu_{\mathbb{Q},\psi}=\mu_{\mathbb{P},\psi}-\sigma_\psi\lambda_\psi$.
+Below we suppress $\psi$ and abbreviate $\mu_{\mathbb{P}}(\mathbf{z}_t)$ as
+$\mu_{\mathbb{P}}(z_t)$ wherever neither dependence is at issue.
+\paragraph{Persistence-residual forecasting.} Daily curves are close to a random
+walk, so the last observed curve is a very strong baseline. We therefore
+parameterize the $h$-step forecast as a correction on top of persistence,
+\begin{equation}
+  \hat{y}_{t+h} = y_t + D_\theta(z_{t+h},\ell_t) - D_\theta(z_t,\ell_t),
+  \label{eq:persres}
+\end{equation}
+where $z_{t+h}$ is obtained by rolling the drift forward with step $\Delta t = 1$.
+With zero drift this reduces exactly to persistence, so the model only has to learn
+the departure from the random walk.
+\paragraph{Training objective.} Each training batch draws a horizon
+$h\sim\mathrm{Unif}\{1,5,21\}$. Stage~B minimizes a one-step latent term plus a
+curve-space term on the decoded (persistence-residual) yields at that horizon,
+\begin{equation}
+  \mathcal{L}_{\mathrm{fit}}
+  = w_{\mathrm{lat}}\,\big\|\hat{z}_{t+1}-z_{t+1}\big\|^2
+  + w_{\mathrm{curve}}\,\big\|\hat{y}_{t+h}-y_{t+h}\big\|^2,
+  \qquad \hat{z}_{t+1}=z_t+\mu_{\mathbb{P}}(z_t)\Delta t,
+\end{equation}
+with $w_{\mathrm{lat}}=0.05$ and $w_{\mathrm{curve}}=10$, both mean-squared errors.
+The latent term is always one-step while the curve term follows the sampled horizon.
+At the reported $h{=}1$ curve RMSE of $0.029$ the curve term is
+$10\times(0.029)^2\approx 8.5\times10^{-3}$, so $\mathcal{L}_{\mathrm{fit}}$ is of
+order $10^{-2}$ near convergence; we use this implied scale, rather than a logged
+value, as the reference against which penalty magnitudes are compared in
+Section~\ref{sec:analysis-inert}.
+The best checkpoint is selected on validation curve-RMSE at $h{=}1$; no test data
+enter model selection. To avoid lookahead, the LevelScript decoder uses the last
+known level rather than the realized future level. Stage~B uses $400$ epochs,
+learning rate $3\times10^{-4}$, and a cosine learning-rate schedule.
+\paragraph{Role of the diffusion term.} Both Eq.~\eqref{eq:persres} and
+$\mathcal{L}_{\mathrm{fit}}$ propagate the drift only, so the reported point
+forecasts are deterministic drift rollouts---a plug-in approximation, not the exact
+conditional mean of a nonlinear SDE---rather than sampled paths. The diffusion
+$\sigma$ enters the objective only through the residual of
+Section~\ref{subsec:constraints}: in the \texttt{sde\_only} and
+\texttt{sde\_jacobian} configurations no term of the objective depends on $\sigma$,
+and the diffusion is therefore not trained. Those two configurations are drift
+networks, and we refer to them as such.
+\subsection{Soft training penalties}
+\label{subsec:constraints}
+Both penalties are evaluated on the same persistence-residual forecast that the
+curve-fitting loss scores, $\hat y = y_t + D_\theta(\hat z) - D_\theta(z_t)$, at the
+horizon sampled for that batch, with horizon gating as described below. This is
+worth stating precisely, because Section~\ref{sec:analysis-inert} turns on it: the
+parameter-dependent part of $\hat y$ is the decoded latent move
+$D_\theta(\hat z) - D_\theta(z_t)$, and the additive term $y_t$ is data.
+\paragraph{Curve-shape regularizer bundle.} This configuration adds three terms. The
+first is $\mathbb{E}[\mathcal{R}^2]$ with
+$\mathcal{R}=-\partial_\tau P+\nabla_z P^{\top}\mu_{\mathbb{Q}}-rP$, in the form of
+the first-order term of a pricing PDE, accompanied by discount-monotonicity and
+forward-smoothness penalties. We deliberately do not call this a no-arbitrage
+residual, for four reasons that together make the label indefensible. (i)~The
+quantities entering $P=\exp(-y\tau)$ are the decoder's outputs, which are in
+robust-scaled units rather than decimals, and $r$ is the scaled shortest-tenor
+yield. Centered, dimensionless quantities cannot be interpreted as annualized
+continuously compounded rates. Although a discount factor above one is possible
+under genuinely negative rates, here its value is driven by preprocessing rather
+than by a pricing convention. (ii)~FRED constant-maturity yields are par yields,
+and zero-coupon prices cannot be recovered from them by $P=e^{-y\tau}$ without
+bootstrapping, which we do not perform. (iii)~$\partial_\tau P$ is implemented as
+$-yP$, which holds only if $y$ is constant in maturity; the
+$\tau\,\partial_\tau y$ term is dropped, as is the Hessian convexity term of the
+full PDE. (iv)~The learned drift uses one business day as its time unit, whereas
+$\tau$ and $r$ enter the residual in annual units, with no factor of $252$ reconciling
+the two. The bundle is therefore a heuristic regularizer on a transform of the
+scaled curve and on the latent dynamics. Our findings about it carry no implication
+for correctly specified no-arbitrage penalization. The bundle is applied at $h{=}1$
+only.
+\paragraph{Decoder-Jacobian tangent penalty.} The penalty
+$w\big\|\hat y-\Pi_{\mathcal{M}}(\hat y)\big\|^2$ is applied at
+$h\in\{1,5,21\}$ with weight $w=0.3$ and a $40$-epoch linear warmup. The tangent map
+is ridge-regularized,
+\begin{equation}
+  \Pi_{\mathcal{M}}(\hat y)=D_\theta(z_t)+J(J^{\top}J+\varepsilon I)^{-1}J^{\top}
+  \big(\hat y-D_\theta(z_t)\big),
+  \qquad J = J(z_t)=\frac{\partial D_\theta}{\partial z}(z_t),
+  \label{eq:ridgemap}
+\end{equation}
+with $\varepsilon = 10^{-5}$. Three properties matter for
+Section~\ref{sec:analysis-inert}: for $\varepsilon>0$ the map is not idempotent, so
+it is only an approximate projector; it targets the affine tangent space at
+$D_\theta(z_t)$, a local linearization of the decoder image rather than that image
+itself; and $J$ is evaluated at the encoder output $z_t$ with a frozen decoder, so
+it is a constant with respect to the trainable Stage~B parameters $\psi$.
+\subsection{Ablation design, hyperparameters, and reproducibility}
+\label{sec:setup}
+The ablation on a shared frozen Stage~A model compares Stage~B configurations that
+share the same architecture and differ only in soft training penalties:
+\begin{itemize}
+  \item \texttt{sde\_only}: no penalties;
+  \item \texttt{sde\_jacobian}: decoder-Jacobian tangent penalty at
+        $h\in\{1,5,21\}$;
+  \item \texttt{sde\_pde}: the curve-shape regularizer bundle, applied at $h{=}1$.
+\end{itemize}
+A fourth configuration combining both penalties was trained. It returned metrics
+numerically identical to \texttt{sde\_pde} across all eight scored quantities at all
+four horizons, which the training code does not predict, since the tangent penalty
+carries a nonzero warmup-scaled weight from the first epoch. Distinguishing a
+checkpoint-selection artifact from a configuration fault requires the per-epoch
+training histories, which were not retained. We therefore exclude that configuration
+rather than interpret it.
+All reported Stage~B numbers are \emph{soft} forecasts: penalties act during training
+only. A hard-projection variant applying the map of Eq.~\eqref{eq:ridgemap} at
+inference exists in the codebase but is not used in any result reported here.
+Locked hyperparameters are $d=5$, hidden width $256$, KL weight $0.03$, $200$
+Stage~A epochs, and $400$ Stage~B epochs with a cosine schedule.
+\paragraph{Reproducibility.} All reported runs use a single seed ($42$), applied via
+\texttt{torch.manual\allowbreak\_seed} and
+\texttt{numpy.random\allowbreak.seed}. Deterministic kernels
+were not enabled and training ran on a cloud GPU, so runs are not bit-reproducible.
+We did not vary the seed and we did not repeat any configuration under a controlled
+protocol, so we have no variance estimate and we make no claim about whether the
+sub-$10^{-4}$ differences reported below would survive a rerun. Per-variant
+best-checkpoint epochs are written to the Stage~B history files, which were not
+retained; no claim in this paper depends on them.
+\subsection{Baseline}
+We benchmark against \textbf{persistence} ($\hat{y}_{t+h}=y_t$), the dominant
+short-horizon reference for daily curves. We also implemented rank-3 PCA--VAR and
+Nelson--Siegel--Svensson/Diebold--Li baselines, but exclude their results because a
+fault in the rolling refit duplicated overlapping observations in the estimation
+window. Without corrected runs, those errors are not interpretable as estimates of
+either model class's performance.
+\subsection{Evaluation protocol}
+We evaluate at horizons $h\in\{1,5,21,63\}$ business days; $h{=}63$ lies outside
+the training horizon set and is treated as an extrapolation stress test. We report
+mean-curve RMSE for accuracy. For geometry we report three quantities: the
+re-encoding distance $\|\hat{y}-D_\theta(E_\phi(\hat{y}))\|$; the \emph{re-encoding
+gain}, the same quantity minus its value at the persistence anchor $y_t$, which
+removes the shared persistence-anchor residual and is negative when the forecast has
+a smaller re-encoding residual than persistence; and a tangent-move residual
+measuring the part of the decoded forecast move outside
+$\operatorname{span}(J(z_t))$. We also report forward-curve smoothness. Note that
+$D(E(y))$ is not the nearest point of the decoder image to $y$---the encoder is not
+a metric projection---so these are re-encoding diagnostics, not distances to a
+manifold.
+\section{Results}
+\label{sec:results}
+All metrics are computed on the held-out \textbf{test} split in scaled yield units,
+from a single training run per configuration. Lower is better throughout. No
+confidence intervals or significance tests accompany these numbers; differences
+should be read as point estimates.
+\subsection{Forecast accuracy}
+\label{sec:results-rmse}
+Table~\ref{tab:curve-rmse} reports test curve RMSE across horizons. At short
+horizons ($h{=}1,5$), persistence attains the lowest error, consistent with
+near-random-walk behavior of daily Treasury yields. The two drift variants track it
+closely.
+At $h{=}21$---within the Stage~B training horizon set---both drift variants have
+lower error than persistence ($0.1221$ and $0.1222$ vs.\ $0.1238$, a margin of about
+$1.3\%$). The two differ from each other by $5\times10^{-5}$, and by at most
+$7\times10^{-5}$ at any trained horizon; at $h{=}63$ the ordering reverses. We do not
+interpret differences of this size in either direction.
+The configuration carrying the regularizer bundle is already worse at $h{=}1$ and
+deteriorates rapidly thereafter, from $0.041$ at $h{=}1$ to $7.68$ at $h{=}63$.
+\begin{table}[t]
+  \centering
+  \caption{Test-set curve RMSE (scaled yields), single run per configuration. Bold
+  marks the lowest entry in each column. Differences between \texttt{sde\_only} and
+  \texttt{sde\_jacobian} are at most $7\times10^{-5}$ at the trained horizons and are
+  not accompanied by any inferential test.}
+  \label{tab:curve-rmse}
+  \begin{tabular}{@{}lcccc@{}}
+    \toprule
+    Model & $h{=}1$ & $h{=}5$ & $h{=}21$ & $h{=}63$ \\
+    \midrule
+    Persistence
+      & $\mathbf{0.02912}$ & $\mathbf{0.06233}$ & $0.12375$ & $\mathbf{0.20239}$ \\
+    \midrule
+    \texttt{sde\_only}
+      & $0.02918$ & $0.06301$ & $0.12217$ & $0.23654$ \\
+    \texttt{sde\_jacobian}
+      & $0.02917$ & $0.06294$ & $\mathbf{0.12212}$ & $0.24637$ \\
+    \texttt{sde\_pde}
+      & $0.04101$ & $0.19675$ & $1.75664$ & $7.67525$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+\subsection{Geometry diagnostics}
+\label{sec:results-geometry}
+Tables~\ref{tab:geom-h1}--\ref{tab:geom-h21} report the geometry and shape
+diagnostics at the trained horizons.
+\paragraph{Tangent-move residual.} This metric measures the off-tangent component of
+the \emph{nonlinear} decoded latent move at $z_t$. It is not the quantity the
+training penalty evaluates, which acts on the persistence-residual forecast and is
+leading-order degenerate for the reason given in
+Section~\ref{sec:analysis-inert}.
+\texttt{sde\_jacobian} is nominally lower at all three horizons, by margins of
+$1\times10^{-6}$, $1.3\times10^{-5}$ and $5.4\times10^{-5}$; with one run per
+configuration we cannot attribute these to the penalty.
+\paragraph{Re-encoding distance and gain.} Absolute re-encoding distance remains
+large ($\approx0.65$) for all drift forecasts and closely tracks the Stage~A
+re-encoding error at the persistence anchor, so it does not discriminate between
+configurations. The
+re-encoding gain, which removes that constant, does not order the two drift variants
+consistently: \texttt{sde\_jacobian} is nominally better at $h{=}1$ and $h{=}5$
+($0.00077$ vs.\ $0.00090$; $0.00341$ vs.\ $0.00397$) and nominally worse at $h{=}21$
+($-0.00652$ vs.\ $-0.00744$, where more negative is better). We report both
+directions rather than the favorable subset.
+\paragraph{Regularizer contrast.} \texttt{sde\_pde} reduces absolute re-encoding
+distance at short horizons but at the cost of large RMSE, and at $h{=}21$ degrades
+sharply on every diagnostic, with a tangent residual of $0.85$. The stability of the
+other two configurations is associated with the \emph{absence} of the bundle rather
+than the presence of the tangent penalty.
+\begin{table}[t]
+  \centering
+  \caption{Ablation at $h{=}1$ (test). Lower is better for RMSE, re-encoding
+  distance, tangent residual and smoothness; for re-encoding gain, more negative is
+  better.}
+  \label{tab:geom-h1}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}lccccc@{}}
+    \toprule
+    Model & RMSE & Re-enc.\ dist. & Re-enc.\ gain & Tangent res. & Fwd.\ smooth. \\
+    \midrule
+    \texttt{sde\_only}
+      & $0.02918$ & $0.6526$ & $0.00090$ & $2.9\!\times\!10^{-5}$ & $0.0375$ \\
+    \texttt{sde\_jacobian}
+      & $0.02917$ & $0.6525$ & $0.00077$ & $2.8\!\times\!10^{-5}$ & $0.0375$ \\
+    \texttt{sde\_pde}
+      & $0.04101$ & $0.6333$ & $-0.01838$ & $0.00330$ & $0.0487$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+\begin{table}[t]
+  \centering
+  \caption{Ablation at $h{=}5$ (test).}
+  \label{tab:geom-h5}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}lccccc@{}}
+    \toprule
+    Model & RMSE & Re-enc.\ dist. & Re-enc.\ gain & Tangent res. & Fwd.\ smooth. \\
+    \midrule
+    \texttt{sde\_only}
+      & $0.06301$ & $0.6572$ & $0.00397$ & $0.000338$ & $0.0379$ \\
+    \texttt{sde\_jacobian}
+      & $0.06294$ & $0.6566$ & $0.00341$ & $0.000325$ & $0.0379$ \\
+    \texttt{sde\_pde}
+      & $0.19675$ & $0.5101$ & $-0.14385$ & $0.04935$ & $0.1060$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+\begin{table}[t]
+  \centering
+  \caption{Ablation at $h{=}21$ (test). The regularizer bundle collapses; the two
+  drift variants remain stable and are not ordered consistently across diagnostics.}
+  \label{tab:geom-h21}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}lccccc@{}}
+    \toprule
+    Model & RMSE & Re-enc.\ dist. & Re-enc.\ gain & Tangent res. & Fwd.\ smooth. \\
+    \midrule
+    \texttt{sde\_only}
+      & $0.12217$ & $0.6479$ & $-0.00744$ & $0.00180$ & $0.0379$ \\
+    \texttt{sde\_jacobian}
+      & $0.12212$ & $0.6489$ & $-0.00652$ & $0.00175$ & $0.0375$ \\
+    \texttt{sde\_pde}
+      & $1.75664$ & $1.2570$ & $0.61702$ & $0.84791$ & $3.0489$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.48\linewidth]{stage_b_sde_only_rmse_vs_horizon.png}
+  \hfill
+  \includegraphics[width=0.48\linewidth]{stage_b_sde_pde_rmse_vs_horizon.png}
+  \caption{Test curve RMSE against forecast horizon for \texttt{sde\_only} (left)
+  and \texttt{sde\_pde} (right). The unconstrained drift degrades smoothly with
+  horizon; the configuration carrying the regularizer bundle diverges beyond the
+  horizon at which the bundle is applied. Note the difference in vertical scale.}
+  \label{fig:horizon}
+\end{figure}
+\subsection{Summary of findings}
+\label{sec:results-summary}
+\begin{enumerate}
+  \item \textbf{Accuracy.} Forecasts from the tangent-penalized and unconstrained
+  drift variants differ by at most $7\times10^{-5}$ at the trained horizons, with the
+  ordering reversing at $h{=}63$. Both have lower error than persistence at $h{=}21$
+  by roughly $1.3\%$ in point estimate.
+  \item \textbf{Geometry.} The two are not ordered consistently across the geometry
+  diagnostics, and no diagnostic separates them by a margin we can attribute to the
+  penalty with one run.
+  \item \textbf{Regularizer bundle.} The configuration carrying it is unstable under
+  multi-step evaluation. The design does not identify which of its three terms is
+  responsible.
+  \item \textbf{Baseline.} Persistence is the lowest-error forecast at every
+  horizon except $h{=}21$.
+\end{enumerate}
+\section{Analysis}
+\label{sec:analysis}
+\subsection{Persistence as the dominant short-horizon reference}
+\label{sec:analysis-persistence}
+At $h{=}1$ and $h{=}5$, persistence attains the lowest curve RMSE ($0.02912$ and
+$0.06233$). This is expected for daily Treasury yields: day-to-day changes are small
+relative to the level of the curve, so ``tomorrow equals today'' is a strong
+baseline. The drift variants sit within $5\times10^{-5}$--$7\times10^{-4}$ of
+persistence at these horizons. On this panel, the informative comparison is
+therefore whether adding the geometric term changes the forecast, not whether either
+drift variant clears persistence by a practically meaningful margin.
+The medium horizon $h{=}21$ is more informative, and both drift variants have lower
+error than persistence there ($0.12212$ / $0.12217$ vs.\ $0.12375$). The margin is
+about $1.3\%$, it is a point estimate from a single run, and it is not accompanied by
+a paired test (Section~\ref{sec:analysis-limitations}). We treat $h{=}21$ as the
+horizon where learned multi-step drift could plausibly matter, and $h{=}1,5$ as
+near-random-walk regimes where matching persistence is the bar.
+\subsection{Observed forecast changes are small}
+\label{sec:analysis-jac-vs-only}
+On the reported run, \texttt{sde\_jacobian} has marginally lower error than
+\texttt{sde\_only} at every trained horizon:
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+  \toprule
+  Horizon & \texttt{sde\_jacobian} & \texttt{sde\_only} & Difference \\
+  \midrule
+  $h{=}1$  & $0.029167$ & $0.029175$ & $8\times10^{-6}$ \\
+  $h{=}5$  & $0.062944$ & $0.063010$ & $6.6\times10^{-5}$ \\
+  $h{=}21$ & $0.122123$ & $0.122173$ & $5.0\times10^{-5}$ \\
+  $h{=}63$ & $0.246372$ & $0.236540$ & $-9.8\times10^{-3}$ \\
+  \bottomrule
+\end{tabular}
+\end{center}
+The differences at trained horizons are in the fourth and fifth decimal places,
+amounting to at most $0.1\%$ of the error, and the ordering reverses at $h{=}63$. We
+ran one seed per configuration and no paired test, so we cannot say whether these
+differences are reproducible, and we do not claim either that the penalty improves
+accuracy or that it is provably neutral in a statistical sense. What we can say is
+that the observed change at trained horizons is small relative to the total forecast
+error. The next section characterizes why the leading-order signal vanishes while
+also identifying the terms through which the implemented penalty can still train.
+\subsection{Leading-order degeneracy and surviving training signals}
+\label{sec:analysis-inert}
+Write $r_t = y_t - D_\theta(z_t)$ for the Stage~A reconstruction residual at the
+forecast origin and
+$m_\psi = D_\theta(\hat z_\psi) - D_\theta(z_t)$ for the decoded move controlled by
+the Stage~B parameters $\psi$. With $A = J^{\top}J$,
+$P_\varepsilon = J(A + \varepsilon I)^{-1}J^{\top}$, and
+$Q_\varepsilon=I-P_\varepsilon$, the implemented penalty is
+\begin{equation}
+  \mathcal{L}_{\mathrm{tan}}(\psi)
+  =w\big\lVert Q_\varepsilon\big(r_t+m_\psi\big)\big\rVert^2 .
+  \label{eq:penalty-actual}
+\end{equation}
+Stage~A is frozen and $y_t$ is data, so $r_t$ does not depend on the dynamics
+parameters. Because $J$ is evaluated at the encoder output $z_t$ with a frozen
+decoder, $J$, $A$, $P_\varepsilon$ and $Q_\varepsilon$ are likewise constants with
+respect to $\psi$; every expansion below treats them as fixed and differentiates only
+through $m_\psi$. The projected component $Q_\varepsilon r_t$ is therefore constant
+in $\psi$, but its interaction with the decoded move need not be.
+\paragraph{Exact projection and a linearized move.} First replace the nonlinear
+move by $J\delta_\psi$, where $\delta_\psi=\hat z_\psi-z_t$, and define
+$B_\varepsilon=Q_\varepsilon J$. Expanding the loss gives
+\begin{equation}
+\begin{split}
+  \mathcal{L}_{\mathrm{tan}}^{\mathrm{lin}}(\psi)
+  ={}&w\lVert Q_\varepsilon r_t\rVert^2
+  +2w\,\delta_\psi^{\top}B_\varepsilon^{\top}Q_\varepsilon r_t\\
+  &+w\,\delta_\psi^{\top}B_\varepsilon^{\top}B_\varepsilon\delta_\psi .
+  \label{eq:linearized-expansion}
+\end{split}
+\end{equation}
+Let $P_0=JJ^+$, with $J^+$ the Moore--Penrose pseudoinverse, be the exact
+orthogonal projector onto
+$\operatorname{span}(J)$. Then $Q_0J=0$, so $B_0=0$ and both
+dynamics-dependent terms in Eq.~\eqref{eq:linearized-expansion} vanish. Thus an
+exact projector applied to a first-order decoded move supplies no training signal to
+$\psi$, even when $r_t\ne0$. This is the precise degeneracy result.
+\paragraph{Finite-ridge leakage.} For $\varepsilon>0$,
+\begin{equation}
+  B_\varepsilon=Q_\varepsilon J
+  =\varepsilon J(A+\varepsilon I)^{-1},
+  \label{eq:offtangent}
+\end{equation}
+and the last two terms of Eq.~\eqref{eq:linearized-expansion} are generally nonzero.
+The middle term couples the learned increment to the fixed reconstruction residual;
+it can shift the increment and is not a shrinkage penalty. The final term is an
+anisotropic shrinkage. Diagonalizing $A$ with eigenvalues $\lambda_i$ and writing
+$\delta=\sum_i\delta_i v_i$ gives
+\begin{equation}
+  \lVert B_\varepsilon\delta\rVert^2
+  = \sum_{i=1}^{d} \frac{\lambda_i\,\varepsilon^2}{(\lambda_i+\varepsilon)^2}\,
+  \delta_i^2
+  \;\leq\; \frac{\varepsilon}{4}\,\lVert\delta\rVert^2 ,
+  \label{eq:spectral}
+\end{equation}
+uniformly in $J$ and with no rank or conditioning assumption, since the scalar
+coefficient is maximized at $\lambda_i = \varepsilon$, where it equals
+$\varepsilon/4$, and vanishes both as $\lambda_i \to 0$ and as
+$\lambda_i \to \infty$. With $w=0.3$ and $\varepsilon=10^{-5}$, the quadratic
+component alone is bounded by
+$7.5\times10^{-7}\lVert\delta\rVert^2$.
+
+This bound does not control the middle cross-term. Equivalently, if $s_i$ denotes a
+singular value of $J$, then $B_\varepsilon$ has singular values
+$\varepsilon s_i/(s_i^2+\varepsilon)$, maximized at $s_i=\sqrt{\varepsilon}$, so
+$\lVert B_\varepsilon\rVert_2\leq\sqrt{\varepsilon}/2$ and by Cauchy--Schwarz the
+cross-term is at most
+$w\sqrt{\varepsilon}\,\lVert\delta\rVert\,\lVert Q_\varepsilon r_t\rVert$ in absolute
+value. The two surviving terms therefore scale as $\sqrt{\varepsilon}$ and
+$\varepsilon$ respectively, and at $\varepsilon=10^{-5}$ they differ by roughly four
+orders of magnitude: the cross-term, not the shrinkage term, is what the penalty
+principally contributes.
+
+We can bound its size from quantities we report. Treating the reconstruction residual
+as approximately isotropic, a per-tenor RMSE of $0.659$ over $N{=}11$ tenors with a
+five-dimensional tangent space gives
+$\lVert Q_\varepsilon r_t\rVert\approx0.659\sqrt{11}\sqrt{6/11}\approx1.6$, so with
+$w=0.3$ and $\sqrt{\varepsilon}\approx3.2\times10^{-3}$ the cross-term is bounded by
+roughly $1.5\times10^{-3}\lVert\delta\rVert$ in the vector-norm convention of
+Eq.~\eqref{eq:penalty-actual}, or $1.4\times10^{-4}\lVert\delta\rVert$ under the
+mean-over-tenors reduction the implementation uses, against a fit loss of order
+$10^{-2}$. The one input we do not have is the typical size of the one-step latent
+increment $\lVert\delta_\psi\rVert$, which was not logged; for
+$\lVert\delta_\psi\rVert$ of order $10^{-2}$ the bound sits three to four orders of
+magnitude below $\mathcal{L}_{\mathrm{fit}}$. This is a bound rather than a
+measurement, and the isotropy assumption is a convenience, but it fixes the scale of
+the surviving linear signal as small without asserting that it is zero.
+\paragraph{Decoder-curvature signal.} The implemented move is nonlinear rather than
+$J\delta$. Locally,
+\begin{equation}
+  m_\psi=J\delta_\psi+\tfrac12 H[\delta_\psi,\delta_\psi]
+  +O(\lVert\delta_\psi\rVert^3),
+\end{equation}
+where $H$ is the decoder Hessian at $z_t$. Under the exact projector,
+\begin{equation}
+  Q_0(r_t+m_\psi)
+  =Q_0r_t+\tfrac12Q_0H[\delta_\psi,\delta_\psi]
+  +O(\lVert\delta_\psi\rVert^3).
+\end{equation}
+When $Q_0r_t\ne0$, the cross-term between reconstruction error and curvature changes
+the loss at order $\lVert\delta_\psi\rVert^2$ and its gradient at order
+$\lVert\delta_\psi\rVert$. If $Q_0r_t=0$, the curvature contribution instead enters
+the loss at fourth order. The actual nonlinear penalty can therefore train through
+decoder curvature even without ridge leakage.
+The analytic conclusion is consequently narrower than total inertness: the exact
+local tangent projector removes the leading-order decoded move, while the
+implemented objective retains a reconstruction-residual cross-term, ridge shrinkage,
+and decoder-curvature effects. Our one-run ablation finds only small changes at the
+trained horizons, which is consistent with these surviving signals being weak in
+that run but does not prove that they are negligible. Establishing their scale would
+require the penalty-gradient norm, $Q_\varepsilon r_t$, and the spectrum of
+$J^{\top}J$ during training.
+A nonlinear re-encoding construction based on $D_\theta(E_\phi(\hat y))$ would
+target return to the decoder image rather than to a local affine tangent space; the
+benchmark of \citet{NoArbVAEYieldCurves} uses such a re-encoding step. Another
+nondegenerate design would apply tangent consistency to a curve-space proposal whose
+first-order motion is not already generated through the decoder Jacobian.
+\subsection{Large re-encoding error complicates projection}
+\label{sec:analysis-reencoding}
+Stage~A test reconstruction RMSE is $0.659$, so real curves sit far from
+$D(E(y))$. A future method that maps forecasts onto $D(E(\hat y))$ need not move them
+closer to the true curve $y^\star$: $D(E(\cdot))$ is not a metric projection, and
+when re-encoding error is this large, mapping onto the decoder image can increase or
+decrease forecast error. The observed error therefore cautions against assuming an
+accuracy gain from projection, but it is not a lower bound on projected forecast
+RMSE or an upper bound on possible improvement.
+It also helps explain why absolute re-encoding distance stays near $0.65$ across
+configurations: the metric closely tracks the Stage~A error at the persistence
+anchor, so it is a weak discriminator. The re-encoding gain subtracts that shared
+anchor value, but on our single run it does not order the two drift variants
+consistently across horizons.
+\subsection{Tangent residual: what it does and does not show}
+\label{sec:analysis-tangent}
+The tangent-move residual measures whether nonlinear decoded moves stay in the
+column space of $J(z_t)$. Unlike absolute re-encoding distance it is not
+saturated by Stage~A error, so it isolates the dynamics contribution. It is not the
+quantity the training penalty evaluates: the penalty acts on the persistence-residual
+forecast, where the parameter-dependent part is degenerate by
+Section~\ref{sec:analysis-inert} at leading order under exact projection, while the
+diagnostic acts on the decoded move alone.
+The measured differences do not separate the two drift configurations.
+\texttt{sde\allowbreak\_jacobian} is nominally lower at $h{=}1$, $5$, and $21$,
+but by margins
+($2.8$ versus $2.9\times10^{-5}$ at $h{=}1$) that we cannot attribute to the penalty
+from one run. The metric does separate the regularizer bundle sharply---$0.0033$ at
+$h{=}1$ rising to $0.85$ at $h{=}21$---and that contrast is where its diagnostic
+value lies.
+\subsection{The regularizer bundle as an unstable comparator}
+\label{sec:analysis-pde}
+The configuration carrying the bundle provides the sharpest contrast in the study. At
+$h{=}1$ it already raises RMSE from $\approx0.029$ to $\approx0.041$; by $h{=}5$ RMSE
+is $\approx0.197$; by $h{=}21$ it exceeds $1.75$; and at $h{=}63$ it exceeds $7.6$.
+Tangent residuals grow in parallel.
+The conclusion concerns the bundle as a whole, and four candidate causes remain
+unseparated by this design. \emph{Horizon gating:} the bundle is applied at $h{=}1$
+only, while the curve-fitting loss uses all three trained horizons, so a model tuned
+to satisfy it at one step is free to drift at longer ones. \emph{Bundling:} the
+discount-monotonicity and forward-smoothness terms accompany the residual and either
+could drive the divergence. \emph{Unit and time-scale misspecification:} the
+residual is computed on robust-scaled yields treated as if they were continuously
+compounded rates, while a daily drift is combined with annual maturity units
+(Section~\ref{subsec:constraints}). \emph{Structural misspecification:} the residual
+omits both the Hessian convexity term and the $\tau\,\partial_\tau y$ term of
+$\partial_\tau P$.
+We therefore make no claim about no-arbitrage penalization as such, and none about
+what a correctly specified residual would do. What the evidence supports is narrower:
+this $h{=}1$-gated regularizer bundle is associated with RMSE growth by a factor of
+roughly $40$ from $h{=}1$ to $h{=}21$ and by more than two orders of magnitude by
+$h{=}63$, whereas configurations without it remain stable across all evaluated
+horizons. A residual-only ablation in correct units, at matched horizons, is the
+natural next experiment.
+\subsection{Extrapolation to 63 business days}
+\label{sec:analysis-h63}
+At $h{=}63$, outside the training horizon set, persistence is best and
+\texttt{sde\_only} has lower error than \texttt{sde\_jacobian} by $9.8\times10^{-3}$
+--- two orders of magnitude larger than the differences at trained horizons, and in
+the opposite direction. We treat this as extrapolation stress rather than evidence
+about the penalty, and restrict our claims to trained horizons.
+\subsection{Limitations}
+\label{sec:analysis-limitations}
+\begin{itemize}
+  \item \textbf{Single run, no inference.} Every number is a point estimate from one
+  seed with nondeterministic kernels. We performed no paired significance testing.
+  Differences of order $10^{-5}$ between drift configurations, and the $1.3\%$ margin
+  over persistence at $h{=}21$, are descriptive. A Diebold--Mariano test with HAC
+  standard errors is the appropriate instrument, and the overlapping forecast windows
+  at $h>1$ induce serial correlation such a test would need to accommodate.
+  \item \textbf{Data pipeline defect.} Roughly $16\%$ of the panel consists of linear
+  interpolants spanning the 2002--2006 discontinuation of the 30-year series
+  (Section~\ref{sec:data}), plus interpolated market holidays. This window lies
+  entirely within the training split, so it does not create synthetic rows in the
+  held-out period; however, it affects the representation and scaler used to produce
+  every held-out forecast. Stage~A was fit on partly synthetic data, and a rebuilt
+  panel is the correct fix.
+  \item \textbf{The regularizer is not a no-arbitrage penalty.} It is computed on
+  robust-scaled par yields treated as continuously compounded zero rates, combines
+  daily and annual time units, and omits two terms of the pricing PDE. Our
+  instability finding is about that penalty as implemented, not about no-arbitrage
+  penalization.
+  \item \textbf{The ablation is not isolated.} The bundle carries three terms applied
+  at a single horizon; the instability cannot be attributed to any one of them.
+  \item \textbf{Classical baselines excluded.} PCA--VAR and NSS results are omitted
+  because the rolling refit duplicated observations. Persistence is therefore the
+  only valid external benchmark in this report.
+  \item \textbf{Surviving penalty terms not measured.} The cross-term and
+  curvature signals of Section~\ref{sec:analysis-inert} are bounded analytically but
+  were not logged during training; the size estimate given there rests on an isotropy
+  assumption and on an unmeasured typical increment norm.
+  \item \textbf{Diffusion is not trained without the bundle.} No term of the
+  \texttt{sde\_only} or \texttt{sde\_jacobian} objective depends on $\sigma$, so
+  those configurations are drift networks rather than fitted SDEs.
+  \item \textbf{Stage~A fidelity.} Reconstruction RMSE of $0.659$ makes an accuracy
+  gain from re-encoding uncertain; it does not impose a formal bound on projected
+  forecast error.
+  \item \textbf{Soft penalties only.} Hard projection at inference was not evaluated.
+  \item \textbf{Single market panel.} Results are for U.S.\ Treasury CMT yields;
+  generalization to other curves, currencies, or crisis regimes is untested.
+\end{itemize}
+\section{Conclusion}
+\label{sec:conclusion}
+We set out to characterize a decoder-Jacobian tangent penalty for learned latent
+yield-curve dynamics, on a shared frozen representation with a random walk as the
+null. The main result is a leading-order degeneracy, not total inertness.
+An exact tangent projector annihilates a first-order decoded latent move, making the
+linearized loss constant in the dynamics parameters. The implemented objective,
+however, uses a finite ridge and a nonlinear decoder. Its loss contains a cross-term
+between the increment and Stage~A reconstruction residual, an anisotropic shrinkage
+term, and a decoder-curvature contribution. The uniform $\varepsilon/4$ bound applies
+only to the quadratic shrinkage term; the cross-term scales as $\sqrt{\varepsilon}$
+and dominates it. The actual penalty can therefore train, though
+not through the direct first-order tangent signal its geometric interpretation might
+suggest. This decomposition is provable without reference to any run. Empirically,
+switching on the penalty changes trained-horizon RMSE by at most
+$7\times10^{-5}$ in our single run; this is consistent with weak surviving signals
+in that run but does not establish that they are always negligible.
+The remaining findings are descriptive and hold for a single run. Persistence is the
+binding benchmark at short horizons and beyond the trained horizon set; the drift
+model improves on it at $h{=}21$ by roughly $1.3\%$ in point estimate; and an
+$h{=}1$-gated bundle of curve-shape regularizers destabilizes multi-step forecasts by
+two orders of magnitude, though the design cannot say which of its terms or
+misspecifications is responsible.
+The methodological lesson runs through all of it: a constraint ablation is only
+interpretable against a random-walk null, with each penalty isolated, in units where
+the penalized quantity means what its name says, and with enough runs to know which
+differences are real. The natural next steps are a residual-only ablation in correct
+units at matched horizons, a re-encoding form of the geometric penalty, a multi-seed
+protocol with paired tests, and a Stage~A model whose reconstruction error is low
+enough that re-encoded points approximate market curves. Those steps would determine
+whether a nondegenerate geometric penalty improves either forecast accuracy or
+curve-consistency diagnostics.
+\label{last_page}
+\bibliography{references}
+\bibliographystyle{iclr2022_conference}
+\end{document}
